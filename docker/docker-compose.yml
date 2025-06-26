@@ -1,0 +1,83 @@
+version: '3.8'
+
+services:
+
+  # Laravel App (novo nome)
+  app:
+    container_name: "syncdemo-app"
+    build:
+      args:
+        user: laravel
+        uid: 1000
+      context: ./ 
+      dockerfile: Dockerfile
+    image: laravel10-app
+    restart: unless-stopped
+    working_dir: /var/www
+    volumes:
+      - ../src:/var/www:delegated    
+    networks:
+      - syncdemo-network
+    depends_on:
+      - mysql_local
+      - mysql_nuvem
+
+  # Nginx (novo nome)
+  nginx:
+    container_name: "syncdemo-nginx"
+    build:
+      context: ./
+      dockerfile: DockerfileNginxDev
+    restart: unless-stopped
+    ports:
+      - "8080:80"        
+      - "8443:443"      
+    volumes:
+      - ../src:/var/www:delegated     
+      - ./nginx/conf.d/dev:/etc/nginx/conf.d
+      - syncdemo-nginx-letsencrypt:/etc/letsencrypt
+    networks:
+      - syncdemo-network
+
+  # Banco LOCAL
+  mysql_local:
+    image: 'mysql/mysql-server:8.0'
+    container_name: syncdemo-mysql-local
+    ports:
+      - '3307:3306' 
+    environment:
+      MYSQL_ROOT_PASSWORD: 'password'
+      MYSQL_ROOT_HOST: '%'
+      MYSQL_DATABASE: 'local_db'
+      MYSQL_USER: 'laravel'
+      MYSQL_PASSWORD: 'password'
+    volumes:
+      - syncdemo_mysql_local_data:/var/lib/mysql
+    networks:
+      - syncdemo-network
+
+  # Banco NUVEM
+  mysql_nuvem:
+    image: 'mysql/mysql-server:8.0'
+    container_name: syncdemo-mysql-nuvem
+    ports:
+      - '3308:3306' 
+    environment:
+      MYSQL_ROOT_PASSWORD: 'password'
+      MYSQL_ROOT_HOST: '%'
+      MYSQL_DATABASE: 'nuvem_db'
+      MYSQL_USER: 'laravel'
+      MYSQL_PASSWORD: 'password'
+    volumes:
+      - syncdemo_mysql_nuvem_data:/var/lib/mysql
+    networks:
+      - syncdemo-network
+
+networks:
+  syncdemo-network:
+    driver: bridge
+
+volumes:
+  syncdemo_mysql_local_data:
+  syncdemo_mysql_nuvem_data:
+  syncdemo-nginx-letsencrypt:
