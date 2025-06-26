@@ -15,7 +15,7 @@ services:
     restart: unless-stopped
     working_dir: /var/www
     volumes:
-      - ../src:/var/www:delegated    
+      - ../:/var/www:delegated    
     networks:
       - syncdemo-network
     depends_on:
@@ -33,7 +33,7 @@ services:
       - "8080:80"        
       - "8443:443"      
     volumes:
-      - ../src:/var/www:delegated     
+      - ../:/var/www:delegated     
       - ./nginx/conf.d/dev:/etc/nginx/conf.d
       - syncdemo-nginx-letsencrypt:/etc/letsencrypt
     networks:
