@@ -30,7 +30,7 @@ RUN docker-php-ext-install pdo_mysql mbstring exif pcntl bcmath gd fileinfo zip
 
 # Get latest Composer
 COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
-COPY ./php/upload.ini /usr/local/etc/php/conf.d/upload.ini
+# COPY ./php/upload.ini /usr/local/etc/php/conf.d/upload.ini
 
 # Create system user to run Composer and Artisan Commands
 RUN useradd -G www-data,root -u $uid -d /home/$user $user
