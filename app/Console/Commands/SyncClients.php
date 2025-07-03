@@ -26,7 +26,7 @@ class SyncClients extends Command
      */
     public function handle()
     {
-        // $this->info('teste');
+        $this->info('iniciando sincronização');
 
         $this->syncFromTo('local', 'nuvem', 'local_to_nuvem');
         $this->syncFromTo('nuvem', 'local', 'nuvem_to_local');
@@ -38,7 +38,7 @@ class SyncClients extends Command
     {
         $clients = DB::connection($sourceConnection)
             ->table('clients')
-            ->where('updated_at', '>=', now()->subMinutes(10)) 
+            // ->where('updated_at', '>=', now()->subMinutes(10)) 
             ->get();
 
         foreach ($clients as $client) {
@@ -58,46 +58,55 @@ class SyncClients extends Command
                 ->where('id', $client->id)
                 ->first();
 
-            if ($target) {
-                if ($client->updated_at > $target->updated_at) {
+            DB::connection($targetConnection)->transaction(function () use (
+                $client,
+                $target,
+                $targetConnection,
+                $sourceConnection,
+                $direction,
+                &$action
+            ) {
+                if ($target) {
+                    if ($client->updated_at > $target->updated_at) {
+                        DB::connection($targetConnection)
+                            ->table('clients')
+                            ->where('id', $client->id)
+                            ->update([
+                                'name' => $client->name,
+                                'email' => $client->email,
+                                'updated_at' => $client->updated_at,
+                            ]);
+
+                        $action = 'update';
+                    } else {
+                        return;
+                    }
+                } else {
                     DB::connection($targetConnection)
                         ->table('clients')
-                        ->where('id', $client->id)
-                        ->update([
+                        ->insert([
+                            'id' => $client->id,
                             'name' => $client->name,
                             'email' => $client->email,
+                            'created_at' => $client->created_at,
                             'updated_at' => $client->updated_at,
                         ]);
 
-                    $action = 'update';
-                } else {
-                    continue;
+                    $action = 'insert';
                 }
-            } else {
-                DB::connection($targetConnection)
-                    ->table('clients')
-                    ->insert([
-                        'id' => $client->id,
-                        'name' => $client->name,
-                        'email' => $client->email,
-                        'created_at' => $client->created_at,
-                        'updated_at' => $client->updated_at,
-                    ]);
 
-                $action = 'insert';
-            }
+                DB::connection($sourceConnection)->table('sync_logs')->insert([
+                    'record_id' => $client->id,
+                    'table_name' => 'clients',
+                    'action' => $action,
+                    'direction' => $direction,
+                    'synced_at' => now(),
+                    'created_at' => now(),
+                    'updated_at' => now(),
+                ]);
 
-            DB::connection($sourceConnection)->table('sync_logs')->insert([
-                'record_id' => $client->id,
-                'table_name' => 'clients',
-                'action' => $action,
-                'direction' => $direction,
-                'synced_at' => now(),
-                'created_at' => now(),
-                'updated_at' => now(),
-            ]);
-
-            $this->line("{$action} de {$sourceConnection} → {$targetConnection} [{$client->id}]");
+                $this->line("{$action} de {$sourceConnection} → {$targetConnection} [{$client->id}]");
+            });
         }
     }
 }
