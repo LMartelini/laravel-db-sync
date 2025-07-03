@@ -7,106 +7,95 @@ use Illuminate\Support\Facades\DB;
 
 class SyncClients extends Command
 {
-    /**
-     * The name and signature of the console command.
-     *
-     * @var string
-     */
     protected $signature = 'app:sync-clients';
+    protected $description = 'Sincroniza múltiplas tabelas entre os bancos local e nuvem';
 
-    /**
-     * The console command description.
-     *
-     * @var string
-     */
-    protected $description = 'Command description';
+    protected array $tablesToSync = [
+        'clients',
+    ];
 
-    /**
-     * Execute the console command.
-     */
     public function handle()
     {
-        $this->info('iniciando sincronização');
-
-        $this->syncFromTo('local', 'nuvem', 'local_to_nuvem');
-        $this->syncFromTo('nuvem', 'local', 'nuvem_to_local');
-
-        $this->info('sincronização concluída com sucesso');
+        foreach ($this->tablesToSync as $table) {
+            $this->sync($table, 'local', 'nuvem', "{$table}_local_to_nuvem");
+            $this->sync($table, 'nuvem', 'local', "{$table}_nuvem_to_local");
+        }
     }
 
-    protected function syncFromTo(string $sourceConnection, string $targetConnection, string $direction)
+    protected function sync(string $table, string $from, string $to, string $direction)
     {
-        $clients = DB::connection($sourceConnection)
-            ->table('clients')
-            // ->where('updated_at', '>=', now()->subMinutes(10)) 
-            ->get();
+        $records = $this->getRecordsToSync($from, $table);
 
-        foreach ($clients as $client) {
-            $alreadySynced = DB::connection($sourceConnection)
-                ->table('sync_logs')
-                ->where('record_id', $client->id)
-                ->where('table_name', 'clients')
-                ->where('direction', $direction)
-                ->exists();
-
-            if ($alreadySynced) {
+        foreach ($records as $record) {
+            if ($this->alreadySynced($from, $table, $record->id, $direction)) {
                 continue;
             }
 
-            $target = DB::connection($targetConnection)
-                ->table('clients')
-                ->where('id', $client->id)
-                ->first();
-
-            DB::connection($targetConnection)->transaction(function () use (
-                $client,
-                $target,
-                $targetConnection,
-                $sourceConnection,
-                $direction,
-                &$action
-            ) {
-                if ($target) {
-                    if ($client->updated_at > $target->updated_at) {
-                        DB::connection($targetConnection)
-                            ->table('clients')
-                            ->where('id', $client->id)
-                            ->update([
-                                'name' => $client->name,
-                                'email' => $client->email,
-                                'updated_at' => $client->updated_at,
-                            ]);
-
-                        $action = 'update';
-                    } else {
-                        return;
-                    }
-                } else {
-                    DB::connection($targetConnection)
-                        ->table('clients')
-                        ->insert([
-                            'id' => $client->id,
-                            'name' => $client->name,
-                            'email' => $client->email,
-                            'created_at' => $client->created_at,
-                            'updated_at' => $client->updated_at,
-                        ]);
-
-                    $action = 'insert';
-                }
-
-                DB::connection($sourceConnection)->table('sync_logs')->insert([
-                    'record_id' => $client->id,
-                    'table_name' => 'clients',
-                    'action' => $action,
-                    'direction' => $direction,
-                    'synced_at' => now(),
-                    'created_at' => now(),
-                    'updated_at' => now(),
-                ]);
-
-                $this->line("{$action} de {$sourceConnection} → {$targetConnection} [{$client->id}]");
-            });
+            $this->syncRecord($table, $record, $from, $to, $direction);
         }
+    }
+
+    protected function getRecordsToSync(string $connection, string $table)
+    {
+        return DB::connection($connection)
+            ->table($table)
+            ->get(); 
+    }
+
+    protected function alreadySynced(string $connection, string $table, string $recordId, string $direction): bool
+    {
+        return DB::connection($connection)
+            ->table('sync_logs')
+            ->where('record_id', $recordId)
+            ->where('table_name', $table)
+            ->where('direction', $direction)
+            ->exists();
+    }
+
+    protected function syncRecord(string $table, $record, string $from, string $to, string $direction)
+    {
+        $target = DB::connection($to)->table($table)->where('id', $record->id)->first();
+
+        DB::connection($to)->transaction(function () use ($table, $record, $target, $from, $to, $direction) {
+            $action = null;
+
+            if ($target) {
+                if ($record->updated_at > $target->updated_at) {
+                    DB::connection($to)->table($table)->where('id', $record->id)->update(
+                        $this->buildDataArray($record, ['id', 'created_at'])
+                    );
+                    $action = 'update';
+                } else {
+                    return;
+                }
+            } else {
+                DB::connection($to)->table($table)->insert(
+                    $this->buildDataArray($record)
+                );
+                $action = 'insert';
+            }
+
+            $this->logSync($from, $table, $record->id, $direction, $action);
+        });
+    }
+
+    protected function logSync(string $connection, string $table, string $recordId, string $direction, string $action)
+    {
+        DB::connection($connection)->table('sync_logs')->insert([
+            'record_id' => $recordId,
+            'table_name' => $table,
+            'action' => $action,
+            'direction' => $direction,
+            'synced_at' => now(),
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+    }
+
+    protected function buildDataArray($record, array $exclude = []): array
+    {
+        return collect((array) $record)
+            ->except($exclude)
+            ->toArray();
     }
 }
