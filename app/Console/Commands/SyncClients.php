@@ -4,6 +4,7 @@ namespace App\Console\Commands;
 
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\DB;
+use Carbon\Carbon;
 
 class SyncClients extends Command
 {
@@ -17,8 +18,8 @@ class SyncClients extends Command
     public function handle()
     {
         foreach ($this->tablesToSync as $table) {
-            $this->sync($table, 'local', 'nuvem', "{$table}_local_to_nuvem");
-            $this->sync($table, 'nuvem', 'local', "{$table}_nuvem_to_local");
+            $this->sync($table, 'local', 'nuvem', "local_to_nuvem");
+            $this->sync($table, 'nuvem', 'local', "nuvem_to_local");
         }
     }
 
@@ -37,19 +38,48 @@ class SyncClients extends Command
 
     protected function getRecordsToSync(string $connection, string $table)
     {
-        return DB::connection($connection)
+        $records = DB::connection($connection)
             ->table($table)
-            ->get(); 
+            ->get();
+        
+        foreach ($records as $record) {
+            $this->info("Record {$record->id}: deleted_at = " . ($record->deleted_at ?? 'null'));
+        }
+
+        return $records;
     }
 
     protected function alreadySynced(string $connection, string $table, string $recordId, string $direction): bool
     {
-        return DB::connection($connection)
+        $lastSync = DB::connection($connection)
             ->table('sync_logs')
             ->where('record_id', $recordId)
             ->where('table_name', $table)
             ->where('direction', $direction)
-            ->exists();
+            ->orderBy('synced_at', 'desc')
+            ->first();
+
+        if (!$lastSync) {
+            return false;
+        }
+
+        $currentRecord = DB::connection($connection)
+            ->table($table)
+            ->where('id', $recordId)
+            ->first();
+
+        if (!$currentRecord) {
+            return true;
+        }
+
+        $lastSyncDate = Carbon::parse($lastSync->synced_at);
+        $recordUpdatedAt = Carbon::parse($currentRecord->updated_at);
+
+        if ($recordUpdatedAt->gt($lastSyncDate)) {
+            return false;
+        }
+
+        return true;
     }
 
     protected function syncRecord(string $table, $record, string $from, string $to, string $direction)
@@ -60,7 +90,9 @@ class SyncClients extends Command
             $action = null;
 
             if ($target) {
-                if ($record->updated_at > $target->updated_at) {
+                $needsUpdate = $this->needsUpdate($record, $target);
+
+                if ($needsUpdate) {
                     DB::connection($to)->table($table)->where('id', $record->id)->update(
                         $this->buildDataArray($record, ['id', 'created_at'])
                     );
@@ -79,6 +111,33 @@ class SyncClients extends Command
         });
     }
 
+    protected function needsUpdate($record, $target): bool
+    {
+        $recordUpdatedAt = $record->updated_at ? Carbon::parse($record->updated_at) : null;
+        $targetUpdatedAt = $target->updated_at ? Carbon::parse($target->updated_at) : null;
+
+        $needsUpdate = $recordUpdatedAt && $targetUpdatedAt && $recordUpdatedAt->gt($targetUpdatedAt);
+
+        if (property_exists($record, 'deleted_at') && property_exists($target, 'deleted_at')) {
+            $recordDeletedAt = $record->deleted_at ? Carbon::parse($record->deleted_at) : null;
+            $targetDeletedAt = $target->deleted_at ? Carbon::parse($target->deleted_at) : null;
+
+            if ($recordDeletedAt && !$targetDeletedAt) {
+                return true;
+            }
+            
+            if (!$recordDeletedAt && $targetDeletedAt) {
+                return true;
+            }
+            
+            if ($recordDeletedAt && $targetDeletedAt && !$recordDeletedAt->equalTo($targetDeletedAt)) {
+                return true;
+            }
+        }
+
+        return $needsUpdate;
+    }
+
     protected function logSync(string $connection, string $table, string $recordId, string $direction, string $action)
     {
         DB::connection($connection)->table('sync_logs')->insert([
@@ -94,8 +153,16 @@ class SyncClients extends Command
 
     protected function buildDataArray($record, array $exclude = []): array
     {
-        return collect((array) $record)
+        $data = collect((array) $record)
             ->except($exclude)
             ->toArray();
+
+        if (isset($data['deleted_at'])) {
+            if ($data['deleted_at'] === '' || $data['deleted_at'] === '0000-00-00 00:00:00') {
+                $data['deleted_at'] = null;
+            }
+        }
+
+        return $data;
     }
 }
